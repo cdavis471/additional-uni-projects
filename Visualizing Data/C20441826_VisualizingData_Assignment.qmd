@@ -1,0 +1,881 @@
+---
+title: "Yamamoto's Warning"
+subtitle: "An Investigation Into Naval Endurance | 1936 - 1945"
+author: "Conor Davis | C20441826"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+    code-copy: true
+    toc: true
+    toc-depth: 3
+    number-sections: false
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+editor_options:
+  chunk_output_type: console
+---
+
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+
+# tidyverse handles data preparation, plotly handles interaction & scales is used for cleaner number formatting in the charts.
+library(tidyverse)
+library(plotly)
+library(scales)
+
+# Shared source caption used consistently across all visualisations.
+source_caption <- "Source: Conway's All The World's Fighting Ships, 1922 - 1946"
+
+# This keeps chart styling consistent across exploratory & explanatory sections.
+theme_yamamoto <- function(base_size = 12) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title = element_text(face = "bold", size = rel(1.22), margin = margin(b = 6)),
+      plot.subtitle = element_text(color = "grey30", margin = margin(b = 10)),
+      plot.caption = element_text(color = "grey40", size = rel(0.85), margin = margin(t = 10)),
+      axis.title.x = element_text(face = "bold", margin = margin(t = 10)),
+      axis.title.y = element_text(face = "bold", margin = margin(r = 10)),
+      axis.text.x = element_text(margin = margin(t = 4)),
+      axis.text.y = element_text(margin = margin(r = 4)),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      panel.grid.minor = element_blank(),
+      plot.margin = margin(12, 18, 12, 12)
+    )
+}
+
+# Main time scope for the project.
+year_min <- 1936
+year_max <- 1945
+
+# These are the combatant vessel groups used for the visual story.
+included_ship_types <- c(
+  "Capital Ship",
+  "Aircraft Carrier",
+  "Cruiser",
+  "Destroyer",
+  "Escort",
+  "Submarine"
+)
+
+# Production evidence is limited to stronger production milestones.
+production_types <- c("Completed", "Launched")
+
+# The final explanatory focus is limited to the United States & Japan.
+usa_japan_countries <- c("United States Of America", "Japan")
+
+# Countries are grouped by their initial wartime side for broad exploratory colour encoding.
+allied_countries <- c(
+  "Great Britain",
+  "United States Of America",
+  "Soviet Union",
+  "France",
+  "Poland",
+  "Norway",
+  "Denmark",
+  "The Netherlands",
+  "Greece",
+  "China",
+  "Brazil"
+)
+
+axis_countries <- c(
+  "Germany",
+  "Japan",
+  "Italy",
+  "Romania",
+  "Finland",
+  "Siam",
+  "Manchukuo",
+  "Hungary",
+  "Bulgaria"
+)
+
+# Broad side palette used in the exploratory charts.
+side_palette <- c(
+  "Allied" = "#2B6CB0",
+  "Axis" = "#C53030",
+  "Neutral / Other" = "#718096"
+)
+
+# Country palette used where multiple nations appear in the same chart.
+country_palette <- c(
+  "United States" = "#2B6CB0",
+  "Great Britain" = "#63B3ED",
+  "Soviet Union" = "#90CDF4",
+  "France" = "#BEE3F8",
+  "Poland" = "#3182CE",
+  "Netherlands" = "#4299E1",
+  "Greece" = "#2C5282",
+  "Brazil" = "#2B6CB0",
+  "Germany" = "#742A2A",
+  "Japan" = "#C53030",
+  "Italy" = "#FC8181",
+  "Romania" = "#E53E3E",
+  "Finland" = "#9B2C2C",
+  "Siam" = "#FEB2B2",
+  "Manchukuo" = "#F56565",
+  "Neutral / Other" = "#718096"
+)
+
+# Focused palette for the USA / Japan explanatory charts.
+usa_japan_palette <- c(
+  "United States" = "#2B6CB0",
+  "Japan" = "#C53030"
+)
+
+# Palette for the heaviest ship fate chart.
+fate_country_palette <- c(
+  "United States - No Wartime Sinking Recorded" = "#90CDF4",
+  "United States - Sunk During 1936 - 1945" = "#1A365D",
+  "Japan - No Wartime Sinking Recorded" = "#FC8181",
+  "Japan - Sunk During 1936 - 1945" = "#742A2A"
+)
+
+# Palette for the diverging additions-versus-losses chart.
+added_sunk_palette <- c(
+  "United States - Completed / Launched" = "#90CDF4",
+  "United States - Sunk" = "#1A365D",
+  "Japan - Completed / Launched" = "#FC8181",
+  "Japan - Sunk" = "#742A2A"
+)
+
+ship_type_palette <- c(
+  "Capital Ship" = "#61ddff",
+  "Aircraft Carrier" = "#7417ad",
+  "Cruiser" = "#f705a3",
+  "Destroyer" = "#1a6e24",
+  "Escort" = "#bee05e",
+  "Submarine" = "#de3e21"
+)
+```
+
+# Background
+
+While searching for a dataset relating to military history, I stumbled upon an interesting fact surrounding a quote:
+
+> I fear we have awakened a sleeping giant.
+
+This is a common, yet falsely, attributed quote to the Japanese Admiral Isoroku Yamamoto, stemming from the movie, 'Tora! Tora! Tora!' from 1970.
+
+
+Intrigued to see if there was any historical inspiration behind this quote, I discovered the following words, attributed to Yamamoto, in the memoirs of Fumimaro Konoe, the Prime Minister of Japan from 1937 - 39 & 1940 - 41.
+
+He quotes Yamamoto from a conversation they had, before the war, who apparently believed that Japan could fight fiercely for the first six months to a year against the United States, but  had no confidence, if the war were to become a two or three year struggle.
+
+> それは是非やれと言われれば初め半年や１年の間は随分暴れてご覧に入れる。然しながら、２年３年となれば全く確信は持てぬ。三国条約が出来たのは致し方ないが、かくなりし上は日米戦争を回避するよう、極力御努力願ひたい。 
+
+> If I was told that I had to do it, then you will certainly observe [the Navy] going all out for half a year to a year. However, I do not hold conviction about the outcome after 2 - 3 years. The Tripartite Treaty cannot be helped, but I would ask you to make every effort to avoid war with the US.
+
+
+This inspired me to explore data relating to naval warfare during the Second World War, to explore why Yamamoto, as an Admiral, might have believed this.
+
+# Data & Scope
+
+```{r}
+#| label: load-and-prepare-data
+
+# Load the dataset.
+# Missing values are treated consistently at import stage.
+ships_raw <- read_csv(
+  "conway_worlds_fighting_ships_2246_dataset.csv",
+  na = c("N/A", "NA", ""),
+  show_col_types = FALSE
+)
+
+# Convert the fields needed for analysis into usable formats.
+# country_display is only a cleaner label for charts, while side supports broad exploratory colouring.
+ships <- ships_raw |>
+  mutate(
+    produced_year = as.integer(produced_year),
+    fate_year = as.integer(fate_year),
+    standard_displacement_tons = as.numeric(standard_displacement_tons),
+    country_display = case_when(
+      country == "United States Of America" ~ "United States",
+      country == "The Netherlands" ~ "Netherlands",
+      TRUE ~ country
+    ),
+    side = case_when(
+      country %in% allied_countries ~ "Allied",
+      country %in% axis_countries ~ "Axis",
+      TRUE ~ "Neutral / Other"
+    ),
+    side = factor(side, levels = c("Allied", "Axis", "Neutral / Other")),
+    ship_type_group = factor(ship_type_group, levels = included_ship_types)
+  )
+
+# Main scoped dataset:
+# retain the selected combatant ship types & the 1936–1945 project window.
+# A record is kept if either production or fate falls within the period.
+scoped_ships <- ships |>
+  filter(
+    ship_type_group %in% included_ship_types,
+    between(produced_year, year_min, year_max) |
+      between(fate_year, year_min, year_max)
+  )
+
+# Production records used across charts.
+# This is limited to completed or launched ships within the scoped years.
+production_records <- scoped_ships |>
+  filter(
+    produced_type %in% production_types,
+    between(produced_year, year_min, year_max)
+  )
+
+# Sunk records used for attrition & loss charts.
+sunk_records <- scoped_ships |>
+  filter(
+    fate_type == "Sunk",
+    between(fate_year, year_min, year_max)
+  )
+
+# Focused subsets for the United States & Japan.
+# These are used in the explanatory visualisations.
+usa_japan_scope <- scoped_ships |>
+  filter(country %in% usa_japan_countries)
+
+usa_japan_production <- production_records |>
+  filter(country %in% usa_japan_countries)
+
+usa_japan_sunk <- sunk_records |>
+  filter(country %in% usa_japan_countries)
+```
+
+Having selected my dataset, which contains military combat vessel production records between 1922 & 1946, using Conway's All The World's Fighting Ships 1922-1946 as it's source, I began to plan for this exploration.
+
+I limited the scope first, to between 1936 & 1945, setting the start as the escalation of the pre-war period, with events such as the re-occupation of the Rhineland taking place in 1936. It is early enough to examine what was happening in the lead up to World War II, but not too early to skew data relating to the war itself. 1945 was the year that first, Germany, then Japan surrendered, ending the war.
+
+I then limited the scope to capital ships, aircraft carriers, cruisers, destroyers, escorts & submarines. These categories represent the combatant vessels most relevant to fleet warfare, carrier warfare, convoy warfare, submarine campaigns & naval attrition. These ships define their nation's core ability to project power, control supply chains & safely travel the world & it was Admiral Yamamoto's domain of understanding.
+
+The scoped dataset contains `r comma(nrow(scoped_ships))` combatant records in total, with eleven columns. Production charts will be limited to ships recorded as **Completed** or **Launched**, as to not inflate numbers with ships that never made it to the water. Loss charts use ships recorded as **Sunk** during `r year_min`--`r year_max`, their fate certain with reliable evidence.
+
+# Exploratory Visualisations
+
+This section contains the exploratory visualizations used to investigate the dataset before forming the Exploratory Analysis & then Explanatory Visualizations.
+
+These charts will be used to inspect the scoped data, to explore potential patterns in the data that may lead to the Big Idea: what factor(s), as an Admiral, defined Yamamoto's belief that the war must be avoided?
+
+I will identify which countries & ship types matter most, examine production & loss patterns & investigate how both Japan & the United States stood compared to the rest of the nations involved.
+
+## 1. Scoped Dataset Composition
+
+```{r}
+#| label: exploratory-ship-type-composition
+#| fig-height: 5.5
+#| fig-width: 8
+
+# Count the scoped records by ship type.
+# This checks the basic shape of the filtered dataset before comparing countries.
+ship_type_counts <- scoped_ships |>
+  count(ship_type_group, name = "records") |>
+  arrange(records)
+
+# Horizontal bar chart makes the ship-type comparison easy to read.
+ggplot(ship_type_counts, aes(x = records, y = fct_reorder(ship_type_group, records))) +
+  geom_col(fill = "#4A5568") +
+  geom_text(aes(label = comma(records)), hjust = -0.1, size = 3.5) +
+  scale_x_continuous(labels = comma, expand = expansion(mult = c(0, 0.12))) +
+  labs(
+    title = "Scope Driven By Smaller Warships",
+    subtitle = "Submarines, escorts & destroyers dominate the scoped records.",
+    x = "Number Of Records",
+    y = NULL,
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+This bar chart explores the overall shape of the scoped dataset, before any other comparison is made. The chart shows which combatant ship types dominate the records, starting the exploration into wartime naval vessels.
+
+As shown in the graph above, submarines, escorts & destroyers dominate in terms of pure number count. As smaller vessels, this is to be expected.
+
+## 2. Major Naval Powers
+
+```{r}
+#| label: exploratory-country-records
+#| fig-height: 6
+#| fig-width: 8
+
+# Identify the countries with the largest number of scoped combatant records.
+# Side is kept here for broad wartime colour grouping.
+top_country_records <- scoped_ships |>
+  count(country_display, side, name = "records") |>
+  slice_max(records, n = 12) |>
+  arrange(records)
+
+# Ordered bar chart shows which navies are most visible in the scoped data.
+ggplot(top_country_records, aes(x = records, y = fct_reorder(country_display, records), fill = side)) +
+  geom_col() +
+  geom_text(aes(label = comma(records)), hjust = -0.1, size = 3.3) +
+  scale_fill_manual(values = side_palette, drop = FALSE) +
+  scale_x_continuous(labels = comma, expand = expansion(mult = c(0, 0.12))) +
+  labs(
+    title = "Major Navies Dominate The Data",
+    subtitle = "Top scoped records show where broad comparison should begin.",
+    x = "Number Of Scoped Records",
+    y = NULL,
+    fill = "Initial Side",
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+After checking what ships the dataset contained, the next question is which countries made up those numbers. This ordered bar chart ranks navies by scoped combatant records, making it easier to see which powers are most visible in the data. 
+
+It identifies the United States as one of the largest producers, along with Japan, with Germany & Great Britain producing the most.
+
+## 3. Ship Composition By Navy
+
+```{r}
+#| label: exploratory-production-mix
+#| fig-height: 6
+#| fig-width: 9
+
+# Find the leading producers before looking at fleet composition.
+top_producing_countries <- production_records |>
+  count(country_display, name = "total_produced") |>
+  slice_max(total_produced, n = 8) |>
+  pull(country_display)
+
+# Count what each leading navy was completing or launching by ship type.
+# total_produced is added so the country order can follow overall production.
+production_mix <- production_records |>
+  filter(country_display %in% top_producing_countries) |>
+  count(country_display, ship_type_group, name = "produced") |>
+  group_by(country_display) |>
+  mutate(total_produced = sum(produced)) |>
+  ungroup()
+
+# Stacked bars are used here because the question is about composition:
+# not just how many ships were produced, but what kinds of ships were produced.
+ggplot(
+  production_mix,
+  aes(
+    x = fct_reorder(country_display, total_produced),
+    y = produced,
+    fill = ship_type_group
+  )
+) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  scale_fill_manual(values = ship_type_palette) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Fleet Mixes Were Not Equal",
+    subtitle = "Completed & launched records reveal different production priorities.",
+    x = NULL,
+    y = "Ships Completed Or Launched",
+    fill = "Ship Type",
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+The next step is to move from ship presence, to ship composition & this stacked bar chart shows which kinds of combatant ships each major navy was completing or launching. This chart helps understand whether navies were adding similar types of ships or building different fleet profiles. 
+
+In this case, there are vast differences, with submarines dominating Germany's composition at over 90%, while the United States provided the most overall balance from submarines to capital ships. Japan is similar to the United States on a smaller scale, while Great Britain is heavily dominated by Escorts. 
+
+Great Britain & Germany's numbers point to a war with submarines attacking supply convoys & their escorts, while the average composition of Japan & the United States points to a more conventional naval war, between ships designed for naval battles.
+
+## 4. Production Across Time
+
+```{r}
+#| label: exploratory-production-over-time
+#| fig-height: 6
+#| fig-width: 9
+
+# Select the largest producers for the time-based production comparison.
+major_producers <- production_records |>
+  count(country_display, name = "total_produced") |>
+  slice_max(total_produced, n = 6) |>
+  pull(country_display)
+
+# Count completed or launched ships per year.
+# complete() fills missing country-year combinations with zero so the lines do not break.
+major_production_by_year <- production_records |>
+  filter(country_display %in% major_producers) |>
+  count(country_display, produced_year, name = "ships_produced") |>
+  complete(
+    country_display = major_producers,
+    produced_year = year_min:year_max,
+    fill = list(ships_produced = 0)
+  )
+
+# Line chart is used because the exploratory question is temporal:
+# which countries sustained or increased production across the period?
+ggplot(
+  major_production_by_year,
+  aes(x = produced_year, y = ships_produced, color = country_display)
+) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = country_palette, na.value = "#718096") +
+  scale_x_continuous(breaks = year_min:year_max) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Production Raises The Endurance Question",
+    subtitle = "Major producers show uneven output across the war years.",
+    x = "Year",
+    y = "Ships Completed Or Launched",
+    color = "Country",
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+With the naval composition visible, the exploration turns to timing, an essential part of Yamamoto's quote. This line chart explores vessels launched or completed across the scoped period. 
+
+The results show a variety in production consistency. Great Britain sees the earliest rapid rise, ramping up with the start of the war, yet sees an extreme drop following Germany's explosion in production. Japan oversees a slow & steady rise, until the end of the war, with the United States then eclipsing all. This is the strongest exploration point of data that has come up, as the United States seems to have vastly outproduced all other nations, ranked on a yearly-high basis.
+
+## 5. Losses Across Time
+
+```{r}
+#| label: exploratory-sinking-heatmap
+#| fig-height: 6
+#| fig-width: 9
+
+# Use the same countries as the production-over-time chart.
+# This makes the loss chart easier to compare with the previous production chart.
+top_sunk_countries <- major_producers
+
+# Count sunk ships by country & year.
+# complete() fills missing years with zero, then side is reattached for colour encoding.
+sinking_heatmap <- sunk_records |>
+  filter(country_display %in% top_sunk_countries) |>
+  count(country_display, side, fate_year, name = "ships_sunk") |>
+  complete(
+    country_display = top_sunk_countries,
+    fate_year = year_min:year_max,
+    fill = list(ships_sunk = 0)
+  ) |>
+  left_join(
+    scoped_ships |> distinct(country_display, side),
+    by = "country_display"
+  ) |>
+  mutate(side = coalesce(side.x, side.y)) |>
+  select(country_display, side, fate_year, ships_sunk)
+
+# Heatmap shows when losses intensified.
+# Alpha carries the number of sunk ships, while colour keeps the broad wartime side visible.
+ggplot(
+  sinking_heatmap,
+  aes(
+    x = fate_year,
+    y = fct_reorder(country_display, ships_sunk, .fun = sum),
+    fill = side,
+    alpha = ships_sunk
+  )
+) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_manual(
+    values = side_palette,
+    breaks = c("Allied", "Axis"),
+    drop = TRUE
+  ) +
+  scale_alpha_continuous(range = c(0.12, 1), breaks = pretty_breaks(4)) +
+  scale_x_continuous(breaks = year_min:year_max) +
+  labs(
+    title = "Wartime Losses Intensified Unevenly",
+    subtitle = "The same major producers show different sinking patterns.",
+    x = "Year Sunk",
+    y = NULL,
+    fill = "Initial Side",
+    alpha = "Ships Sunk",
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+Following the previous chart, the exploration continues to the opposite side of the same coin. Production is only one side of the wartime naval picture, so the next exploratory step is to examine losses. This heatmap explores the concentration of vessels lost (sunk) across the scope, among the same major countries in the production trend. The purpose here is to explore the role of attrition during the scope. While the previous charts show vast German production, this one shows they incurred losses far beyond everyone else & right behind is Japan. It is important to note, that this doesn't happen until 1943, which begins to hit the timeframe that Yamamoto was concerned about. This is another strong point of exploration data, which seems to provide more evidence to support Yamamoto's thoughts about how the war would proceed, well in advance, while also granting some more clarity on where these thoughts stemmed from - industrial capacity itself.
+
+## 6. Honing The Exploration
+
+```{r}
+#| label: exploratory-carrier-preview
+#| fig-height: 5.5
+#| fig-width: 8
+
+# Final exploratory narrowing point:
+# focus only on aircraft carriers completed or launched by the United States & Japan.
+# Losses are removed here so this chart acts as a production-focused bridge
+# before the explanatory section handles attrition more directly.
+carrier_produced_preview <- production_records |>
+  filter(
+    country %in% usa_japan_countries,
+    ship_type_group == "Aircraft Carrier"
+  ) |>
+  count(country_display, year = produced_year, name = "ships") |>
+  complete(
+    country_display = c("United States", "Japan"),
+    year = year_min:year_max,
+    fill = list(ships = 0)
+  )
+
+# Line chart shows how carrier production changed over time for both countries.
+# This keeps the visual simple & avoids mixing production & loss events
+# before the explanatory visualisations begin.
+ggplot(
+  carrier_produced_preview,
+  aes(x = year, y = ships, color = country_display)
+) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = usa_japan_palette) +
+  scale_x_continuous(breaks = year_min:year_max) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "The Aircraft Carrier",
+    subtitle = "Carrier production shows the emerging trend.",
+    x = "Year",
+    y = "Aircraft Carriers Completed / Launched",
+    color = "Country",
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+The final exploratory chart narrows the view to Aircraft Carriers. These vessels are large & provide unmatched power projection over the oceans, acting as sailing airports. They are a massive undertaking to construct & would provide a perfect specific ship example for comparison, as powerful & costly ships. While Exploratory Chart III showed us that the composition of the United States Navy contained the most carriers, followed by Great Britain & then Japan, this gives us an exact look at the numbers per year.
+
+Yamamoto was worried that Japan would not be able to win a war against the United States if it progressed beyond a couple years & it is clear to see why. This charts shown an extreme difference in the production of these vessels in particular, more severe than third chart would suggest.
+
+# Exploratory Analysis
+
+The exploratory visualizations begin by exploring the scoped dataset before moving towards any conclusion. The first chart shows that the selected combatant records are dominated by submarines, escorts & destroyers. This is expected, as these were smaller & more numerous vessel types, but it also confirms that raw ship counts alone cannot explain naval power. A navy producing many submarines or escorts was not necessarily producing the same kind of force as one producing carriers, cruisers or capital ships.
+
+The next step was to identify which countries were most visible in the data. The ordered country chart showed the main wartime naval powers, that Japan & the United States were among them, making it reasonable to focus on large producers rather than isolated records for the duration of the exploration. 
+
+From there, the production mix chart showed major differences in naval composition. Germany’s records were heavily dominated by submarines, while Great Britain had a large escort presence. The United States showed a broader production profile across multiple combatant categories & Japan appeared similar in shape, but on a smaller scale. This points to the idea that each nation's fleet composition was being shaped by their opponents & the battles they faced. This was a good sign for the dataset chosen, as it showed that Japan & the United States were comparatively similar in composition, which would lead to easier analysis into Yamamoto's fears.
+
+The production-over-time chart then moved the exploration toward the central issue in Yamamoto’s warning: the war dragging on. The patterns suggest that some countries rose early or unevenly, while the United States eventually eclipsed the other major powers in annual production. Japan’s production rose more gradually, but did not show the same late-war surge. This was the first essential data point to defining the Big Idea, my conclusion as to why Yamamoto feared a longer war.
+
+The loss heatmap expanded on the other side of the same issue: attrition. Production alone does not show endurance. If you are producing more ships than your enemy, but losing all of them without inflicting any damage, then the production was wasted. The data shows that Germany & Japan appear especially exposed to losses, with Japan’s losses becoming more visible around 1943, which aligns with the timeframe Yamamoto feared.
+
+Finally, the last chart narrowed the exploration to a specific ship type. Carriers were & still are, large, costly & strategically important vessels. Honing in on a direct exploration into a specific relationship between the United States & Japan, the difference in Carrier production sets the final tone in place for the Big Idea.
+
+Yamamoto feared a prolonged war because Japan would not be able to match the industrial capacity of the United States, which was, a sleeping giant.
+
+# Big Idea
+
+Yamamoto’s Warning was ultimately about American industrial capacity & Japan's ability to endure it. Japan appears as a serious naval power, right from the beginning, but the rapid production of the United States meant doom for the Empire in a prolonged war.
+
+# Explanatory Visualisations
+
+This section contains the Explanatory Visualizations used to explore the Big Idea, that Yamamoto wanted to avoid war because of the industrial might of the United States.
+
+With an analysis of difference in production with standard displacement as a weighted measurement, a comparison into raw production & losses count, an overview of the flagships of each navy / their fate & finally an overview of carrier losses across the war period, in contrast to the final exploratory chart, we will come to understand just how accurate Yamamoto was in his evaluation & how it ultimately lay with industrial capacity.
+
+## 1. Production Endurance
+
+```{r}
+#| label: explanatory-endurance-gap
+#| fig-height: 6
+#| fig-width: 9
+
+# Aggregate completed or launched United States & Japanese ships by recorded displacement.
+# Displacement is used here because ship count alone would treat very different ship types as equal.
+production_tonnage <- usa_japan_production |>
+  group_by(country_display, produced_year) |>
+  summarise(
+    recorded_displacement = sum(standard_displacement_tons, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  complete(
+    country_display = c("United States", "Japan"),
+    produced_year = year_min:year_max,
+    fill = list(recorded_displacement = 0)
+  )
+
+# Place the annotation high enough to avoid sitting directly on the main lines.
+annotation_y <- max(production_tonnage$recorded_displacement, na.rm = TRUE) * 0.9
+
+# Annotated line chart focuses the viewer on the long-war production gap after 1941.
+ggplot(
+  production_tonnage,
+  aes(x = produced_year, y = recorded_displacement, color = country_display)
+) +
+  geom_vline(xintercept = 1941, linetype = "dashed", color = "grey45") +
+  annotate(
+    "label",
+    x = 1938,
+    y = annotation_y,
+    label = "1941: Yamamoto's Warning Becomes\n Reality With Attack on Pearl Harbour",
+    hjust = 0,
+    size = 3.3,
+    label.size = 0.25,
+    fill = "white"
+  ) +
+  geom_line(linewidth = 1.25) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values = usa_japan_palette) +
+  scale_x_continuous(breaks = year_min:year_max) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "The United States Pulls Away",
+    subtitle = "Recorded displacement exposes the long-war production gap after 1941",
+    x = "Year Produced",
+    y = "Sum Of Recorded Standard Displacement",
+    color = "Country",
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+
+The first explanatory chart addresses production scale, asking whether the United States & Japan sustained naval production at the same recorded scale once the war became prolonged. 
+
+A line chart was chosen because the question is based on change over time; a grouped bar chart could have been used, but it would make the long-term trend harder to follow. Recorded standard displacement is mapped to the y-axis instead of raw ship count because different ship types carried very different weight & importance, providing a more concrete overall view of investment. 
+
+Colour separates the two countries, a respective red & blue, associated colours of the Allies & Axis, while the annotation at 1941 marks the point where Yamamoto’s warning becomes a practical long-war question rather than a hypothetical concern, with Japan launching a surprise attack on Pearl Harbor on December 7th, 1941. A divergence in production appears already within a year & dramatically widens after.
+
+
+## 2. Replacement Pressure
+
+```{r}
+#| label: explanatory-added-versus-sunk
+#| fig-height: 6
+#| fig-width: 9
+
+# Count ships added by year.
+# These values remain positive in the diverging bar chart.
+added_summary <- usa_japan_production |>
+  count(country_display, year = produced_year, name = "ships") |>
+  mutate(
+    event = "Completed / Launched",
+    signed_ships = ships
+  )
+
+# Count ships sunk by year.
+# These values are made negative so losses appear below the zero line.
+sunk_summary <- usa_japan_sunk |>
+  count(country_display, year = fate_year, name = "ships") |>
+  mutate(
+    event = "Sunk",
+    signed_ships = -ships
+  )
+
+# Combine additions & losses into one yearly frame.
+# complete() ensures empty country-year-event combinations are shown as zero rather than disappearing.
+added_sunk <- bind_rows(added_summary, sunk_summary) |>
+  complete(
+    country_display = c("United States", "Japan"),
+    year = year_min:year_max,
+    event = c("Completed / Launched", "Sunk"),
+    fill = list(ships = 0, signed_ships = 0)
+  ) |>
+  mutate(fill_key = paste(country_display, event, sep = " - "))
+
+# Diverging bars make replacement pressure visible:
+# ships added above zero, ships sunk below zero.
+ggplot(added_sunk, aes(x = year, y = signed_ships, fill = fill_key)) +
+  geom_hline(yintercept = 0, color = "grey35", linewidth = 0.4) +
+  geom_col(width = 0.75) +
+  facet_wrap(~country_display, ncol = 1) +
+  scale_fill_manual(values = added_sunk_palette) +
+  scale_x_continuous(breaks = year_min:year_max) +
+  scale_y_continuous(labels = abs) +
+  labs(
+    title = "Replacement Pressure Becomes Visible",
+    subtitle = "Ships added & sunk share the same yearly frame",
+    x = "Year",
+    y = "Ships",
+    fill = NULL,
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+
+The second explanatory chart shows the pressure missing from a production-only view. Positive bars show combatant ships completed or launched, while negative bars show combatant ships recorded as sunk. The diverging design places additions & losses into the same yearly frame. This aims to support the Big Idea by showing that endurance depended not only on building ships, but on building enough while wartime losses were accumulating. If you begin to lose battles, due to disadvantageous numbers, morale, or any reason, those losses must be replaced. 
+
+The sheer difference emerging in 1943 communicates clearly that Japan was losing more ships & the capacity it had to replace them was eclipsed by the United States, who, with growing numerical superiority, was losing far less. This likely led to a compounding effect in strain on Japan's ability to adequately fight in the war.
+
+Ultimately, this chart asks whether ships being added were keeping pace with ships being sunk. A diverging bar chart was chosen because additions & losses work in opposite directions, making it clearer to place completed / launched ships above zero & sunk ships below zero. By using position around a shared zero line, above one another, the chart reduces cognitive load & makes replacement pressure easier to understand year by year. Once again, the colours used mimic the associated colours of the Allies & Axis, often regarded as blue for good, red for evil. This may be considered bias in other contexts, but Japan was ultimately the aggressor in this conflict.
+
+
+## 3. Heaviest Ships
+
+```{r}
+#| label: explanatory-heaviest-ships
+#| fig-height: 6.5
+#| fig-width: 9
+
+# Select the five heaviest completed or launched ships for each navy.
+# This moves from aggregate totals into named ships & their wartime outcomes.
+heaviest_ships <- usa_japan_scope |>
+  filter(
+    produced_type %in% production_types,
+    !is.na(standard_displacement_tons)
+  ) |>
+  group_by(country_display) |>
+  slice_max(
+    order_by = standard_displacement_tons,
+    n = 5,
+    with_ties = FALSE
+  ) |>
+  ungroup() |>
+  mutate(
+    # Separate ships sunk during the project window from ships with no wartime sinking recorded.
+    wartime_fate = if_else(
+      fate_type == "Sunk" & between(fate_year, year_min, year_max),
+      "Sunk During 1936 - 1945",
+      "No Wartime Sinking Recorded"
+    ),
+
+    # Build exact colour keys for the manual palette.
+    fate_country = case_when(
+      country_display == "United States" & wartime_fate == "No Wartime Sinking Recorded" ~ "United States - No Wartime Sinking Recorded",
+      country_display == "United States" & wartime_fate == "Sunk During 1936 - 1945" ~ "United States - Sunk During 1936 - 1945",
+      country_display == "Japan" & wartime_fate == "No Wartime Sinking Recorded" ~ "Japan - No Wartime Sinking Recorded",
+      country_display == "Japan" & wartime_fate == "Sunk During 1936 - 1945" ~ "Japan - Sunk During 1936 - 1945"
+    ),
+
+    # Combine ship name & class for readable labels.
+    ship_label = paste0(ship_name, " (", ship_class, ")"),
+    ship_label = fct_reorder(ship_label, standard_displacement_tons)
+  )
+
+# Lollipop chart keeps named ships readable while still giving accurate displacement comparison.
+ggplot(
+  heaviest_ships,
+  aes(
+    x = standard_displacement_tons,
+    y = ship_label,
+    color = fate_country
+  )
+) +
+  geom_segment(
+    aes(x = 0, xend = standard_displacement_tons, yend = ship_label),
+    linewidth = 0.7,
+    alpha = 0.55
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = fate_country_palette, breaks = names(fate_country_palette), na.value = "grey70") +
+  scale_x_continuous(labels = comma, expand = expansion(mult = c(0, 0.08))) +
+  labs(
+    title = "Heavy Ships Show The Stakes",
+    subtitle = "The largest completed or launched records reveal wartime outcomes",
+    x = "Recorded Standard Displacement",
+    y = NULL,
+    color = "Country & Wartime Fate",
+    caption = source_caption
+  ) +
+  theme_yamamoto()
+```
+
+The third explanatory chart moves from national totals to specific ships. Large combatant ships represented a major concentration of resources & time spent, so their wartime fate helps show what was at stake behind the broader production & loss patterns. 
+
+These ships also served as symbolic displays of power & beacons for morale. With the five heaviest US vessels surviving the war & all of Japan's sunk, including the Yamato & her sister ship, the Musashi, these Japanese symbols of power were being destroyed & they were not being replaced. It may also point to a deeper desperation in industrial capacity, where resources were trying to be consolidated into a one-for-all solution, leading to Japan deploying the two heaviest battleships ever made & the largest carrier of the war.
+
+A lollipop chart was chosen because it keeps named ships readable while still allowing accurate comparison through position along a shared displacement axis. A scatter chart could have been used, but it would not show the scale difference as quickly, which was the focal point of this design choice. Colour sharply connects each ship to country & ultimate wartime fate, while ranking the ships by displacement makes the heaviest vessels immediately visible.
+
+
+## 4. Carrier Losses
+
+```{r}
+#| label: explanatory-carrier-sunk-interactive
+#| fig-height: 6.5
+# Keep only United States & Japanese aircraft carriers recorded as sunk.
+# This final explanatory chart focuses on carrier attrition rather than production.
+carrier_sunk_only <- sunk_records |>
+  filter(
+    country %in% usa_japan_countries,
+    ship_type_group == "Aircraft Carrier"
+  ) |>
+  transmute(
+    country_display,
+    ship_name,
+    ship_class,
+    fate_year,
+    standard_displacement_tons,
+    produced_year,
+    produced_type,
+    fate_type,
+
+    # Hover text preserves ship-level detail without placing labels directly on the chart.
+    hover_text = paste0(
+      "<b>", ship_name, "</b>",
+      "<br>Class: ", ship_class,
+      "<br>Country: ", country_display,
+      "<br>Year sunk: ", fate_year,
+      "<br>Recorded displacement: ", comma(standard_displacement_tons),
+      "<br>Produced year: ", coalesce(as.character(produced_year), "N/A"),
+      "<br>Produced type: ", coalesce(produced_type, "N/A"),
+      "<br>Fate: ", fate_type
+    )
+  )
+
+# Static ggplot object is built first, then passed into Plotly for interaction.
+carrier_sunk_plot <- ggplot(
+  carrier_sunk_only,
+  aes(
+    x = fate_year,
+    y = standard_displacement_tons,
+    color = country_display,
+    text = hover_text
+  )
+) +
+  geom_point(
+    size = 2.5,
+    alpha = 0.80,
+
+    # A small horizontal jitter prevents points from sitting directly on top of each other when several carriers were sunk in the same year.
+    position = position_jitter(width = 0.08, height = 0, seed = 20441826)
+  ) +
+  scale_color_manual(values = usa_japan_palette) +
+  scale_x_continuous(breaks = year_min:year_max) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Carrier Losses Concentrate Late",
+    subtitle = "Sunk carrier records compare timing & scale across navies",
+    x = "Year Sunk",
+    y = "Recorded Standard Displacement",
+    color = "Country",
+    caption = source_caption
+  ) +
+  theme_yamamoto() +
+  theme(
+    axis.title.y = element_text(face = "bold", margin = margin(r = 28)),
+    axis.text.y = element_text(margin = margin(r = 8))
+  )
+
+# Convert the chart to Plotly so the viewer can inspect individual carrier records.
+# The legend remains horizontal to match the rest of the document styling.
+ggplotly(carrier_sunk_plot, tooltip = "text") |>
+  layout(
+    legend = list(orientation = "h", x = 0, y = -0.2),
+    yaxis = list(
+      title = list(
+        text = "<b>Recorded Standard Displacement</b>",
+        standoff = 28
+      ),
+      automargin = TRUE
+    )
+  )
+```
+
+The final explanatory chart returns to Aircraft Carriers, showing those recorded as sunk, honing in on carrier losses per year. Clearly from the data, it shows that while losses started roughly even, as the war reached its pinnacle in 1944, Japan was overwhelmed & lost three times the amount of carriers as the United States, complementing the final exploratory chart.
+
+Ultimately, this chart asks how aircraft carrier losses differed between the United States & Japan. It does not repeat the general loss pattern from the replacement-pressure chart, instead it narrows the evidence to individual sunk carriers. An interactive scatter chart was chosen because labelling every carrier directly would clutter the visual design. I was unsure what other type of chart would even support what this is attempting to showcase. Year sunk is mapped to the x-axis, recorded displacement to the y-axis & colour to country, allowing the viewer to compare timing & scale while using hover text to inspect ship-level details. Organized by year, it is easy to see which in particular contained the heaviest recorded losses & for whom, leading back to Yamamoto's concern for the future.
+
+# Final Thoughts
+
+Japan appears in the scoped data with serious naval capacity & the project does not suggest otherwise, reinforced by the chart displaying the largest ships deployed during the war. The issue is what happens when that power has to be sustained across several years against the industrial potential of the United States.
+
+The first explanatory chart shows the United States pulling away in recorded combatant production, which gives the production side of the argument. The second chart places ships added & ships sunk into the same yearly frame, emphasizing the replacement side of the same argument. The third chart brings the point down to the greatest vessels of the war, showing that these losses & survivals were not abstract numbers, but large vessels that represented major naval investment. The final interactive carrier chart then brings the story back to the formation of the Big Idea, with direct proof of how the war progressed, from the point of view of potentially the most important ship type that was produced.
+
+The explanatory charts show why Yamamoto's warning can be read as a warning about the inevitability of defeat at the hands of the raw industrial power of the United States, rather than a fear of their military prowess, a fear of over-extension should they be successful, a battle of wills between their populations, or a general apprehension to a prolonged war & the effect that would have on Japan.
+
+# Limitations
+
+This project uses the dataset as a structured historical record of ships, production milestones & fates. It is not a complete measurement of naval power. Recorded standard displacement is useful because it gives a sense of ship scale, but it does not directly measure industrial cost, combat effectiveness, crew quality, doctrine, repairs, fuel supply, training, radar, aircrew experience or operational availability.
+
+The production-versus-loss comparison should also considered in a certain manner. A ship completed or launched in one year does not automatically mean it was immediately available for combat & a ship sunk in a year does not capture every wider operational consequence of that loss. The chart is therefore best understood as an approximation of replacement pressure, not a precise calculation of fleet strength.
+
+The scope of the project is also deliberately narrow. It focuses on capital ships, aircraft carriers, cruisers, destroyers, escorts & submarines, which keeps the story centred on the main combatant categories. This means smaller, specialized & support vessels are not part of the visual story, even though they mattered to the wider naval war. Finally, because the dataset is based on a book source from 1980, some individual ship details or fates may have been revised by later discoveries & / or research.
