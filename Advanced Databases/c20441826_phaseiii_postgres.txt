@@ -1,0 +1,212 @@
+-- ============================
+-- ADVANCED DATABASES - PHASE 3
+-- CONOR DAVIS - C20441826
+-- POSTGRESQL PARTITIONING
+-- ============================
+
+-- Set Initial Path
+-- ------------------
+SET search_path = c20441826_phaseii_dw, public;
+
+-- ----------------
+-- SETUP & EVIDENCE
+-- ----------------
+
+-- Timestamp & Version
+-- -------------------
+SELECT now(), version(), current_database(), current_schema();
+
+-- Data Timeframe Testing
+-- ----------------------
+SELECT
+	COUNT(*) AS fact_rows,
+	MIN(date_key) AS min_date_key,
+	MAX(date_key) AS max_date_key
+FROM c20441826_phaseii_dw.fact_pricing;
+
+-- -----------------------------------------------------
+-- RANGE PARTITIONING (by date_key) | Partitions By Week
+-- -----------------------------------------------------
+
+-- Create Table
+-- ------------
+DROP TABLE IF EXISTS c20441826_phaseii_dw.fact_pricing_range CASCADE;
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_range ( LIKE c20441826_phaseii_dw.fact_pricing ) PARTITION BY RANGE (date_key);
+
+-- Create Weekly RANGE Partitions
+-- ------------------------------
+DO $$
+DECLARE
+	d date;
+	d_start date;
+	d_end date;
+BEGIN
+	SELECT date_trunc('week', MIN(date_actual))::date, date_trunc('week', MAX(date_actual))::date
+	INTO d_start, d_end
+	FROM c20441826_phaseii_dw.dim_date;
+	FOR d IN
+		SELECT generate_series(d_start, d_end, interval '1 week')::date
+	LOOP
+		EXECUTE format(
+			'CREATE TABLE c20441826_phaseii_dw.fact_pricing_range_w%s PARTITION OF c20441826_phaseii_dw.fact_pricing_range FOR VALUES FROM (%s) TO (%s);',
+			to_char(d,'YYYYMMDD'),
+			to_char(d,'YYYYMMDD')::int,
+			to_char(d + 7,'YYYYMMDD')::int
+		);
+	END LOOP;
+END$$;
+
+-- Index Creation
+-- --------------
+CREATE INDEX fact_pricing_range_date_key_idx ON c20441826_phaseii_dw.fact_pricing_range (date_key);
+CREATE INDEX fact_pricing_range_product_key_idx ON c20441826_phaseii_dw.fact_pricing_range (product_key);
+CREATE INDEX fact_pricing_range_coupon_gin_idx ON c20441826_phaseii_dw.fact_pricing_range USING gin (extra_info jsonb_path_ops);
+
+-- Populate From Fact Table
+-- ------------------------
+INSERT INTO c20441826_phaseii_dw.fact_pricing_range (fact_id, date_key, product_key, quantity, unit_price, discount, line_revenue, price_delta, extra_info)
+SELECT fact_id, date_key, product_key, quantity, unit_price, discount, line_revenue, price_delta, extra_info
+FROM c20441826_phaseii_dw.fact_pricing;
+
+-- Confirm Creation of RANGE Partitions
+-- ------------------------------------
+SELECT * FROM pg_partition_tree('c20441826_phaseii_dw.fact_pricing_range'::regclass);
+
+-- ----------------------------------------------------
+-- LIST PARTITIONING (by coupon) | Partitions By Coupon
+-- ----------------------------------------------------
+
+-- Create Table
+-- ------------
+DROP TABLE IF EXISTS c20441826_phaseii_dw.fact_pricing_list CASCADE;
+
+-- Facilitate Constraints (Include All Partition Key Columns)
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_list (
+  LIKE c20441826_phaseii_dw.fact_pricing
+    INCLUDING DEFAULTS
+    INCLUDING GENERATED
+    INCLUDING IDENTITY,
+  coupon text NOT NULL
+) PARTITION BY LIST (coupon);
+
+-- Include Partition Key
+ALTER TABLE c20441826_phaseii_dw.fact_pricing_list ADD PRIMARY KEY (coupon, fact_id);
+
+
+-- Create Coupon LIST Partitions
+-- -----------------------------
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_list_save10 PARTITION OF c20441826_phaseii_dw.fact_pricing_list FOR VALUES IN ('SAVE10');
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_list_welcome PARTITION OF c20441826_phaseii_dw.fact_pricing_list FOR VALUES IN ('WELCOME');
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_list_none PARTITION OF c20441826_phaseii_dw.fact_pricing_list FOR VALUES IN ('NONE');
+
+-- Index Creation
+-- --------------
+CREATE INDEX fact_pricing_list_coupon_idx ON c20441826_phaseii_dw.fact_pricing_list (coupon);
+CREATE INDEX fact_pricing_list_date_key_idx ON c20441826_phaseii_dw.fact_pricing_list (date_key);
+CREATE INDEX fact_pricing_list_coupon_gin_idx ON c20441826_phaseii_dw.fact_pricing_list USING gin (extra_info jsonb_path_ops);
+
+-- Populate From Fact Table
+-- ------------------------
+INSERT INTO c20441826_phaseii_dw.fact_pricing_list (fact_id, date_key, product_key, quantity, unit_price, discount, line_revenue, price_delta, extra_info, coupon)
+SELECT fact_id, date_key, product_key, quantity, unit_price, discount, line_revenue, price_delta, extra_info, COALESCE(NULLIF(extra_info->>'coupon',''), 'NONE') AS coupon
+FROM c20441826_phaseii_dw.fact_pricing;
+
+-- Confirm Creation of LIST Partitions
+-- -----------------------------------
+SELECT * FROM pg_partition_tree('c20441826_phaseii_dw.fact_pricing_list'::regclass);
+
+-- ----------------------------------------------------------------
+-- 3) HASH PARTITIONING (by product_key) | Partition By Even Slices
+-- ----------------------------------------------------------------
+
+-- Create Table
+DROP TABLE IF EXISTS c20441826_phaseii_dw.fact_pricing_hash CASCADE;
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_hash ( LIKE c20441826_phaseii_dw.fact_pricing ) PARTITION BY HASH (product_key);
+
+-- Create Even HASH Partitions
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_hash_p0 PARTITION OF c20441826_phaseii_dw.fact_pricing_hash FOR VALUES WITH (MODULUS 4, REMAINDER 0);
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_hash_p1 PARTITION OF c20441826_phaseii_dw.fact_pricing_hash FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_hash_p2 PARTITION OF c20441826_phaseii_dw.fact_pricing_hash FOR VALUES WITH (MODULUS 4, REMAINDER 2);
+CREATE TABLE c20441826_phaseii_dw.fact_pricing_hash_p3 PARTITION OF c20441826_phaseii_dw.fact_pricing_hash FOR VALUES WITH (MODULUS 4, REMAINDER 3);
+
+-- Index Creation
+CREATE INDEX fact_pricing_hash_product_key_idx ON c20441826_phaseii_dw.fact_pricing_hash (product_key);
+CREATE INDEX fact_pricing_hash_date_key_idx ON c20441826_phaseii_dw.fact_pricing_hash (date_key);
+CREATE INDEX fact_pricing_hash_coupon_gin_idx ON c20441826_phaseii_dw.fact_pricing_hash USING gin (extra_info jsonb_path_ops);
+
+-- Populate
+INSERT INTO c20441826_phaseii_dw.fact_pricing_hash (fact_id, date_key, product_key, quantity, unit_price, discount, line_revenue, price_delta, extra_info)
+SELECT fact_id, date_key, product_key, quantity, unit_price, discount, line_revenue, price_delta, extra_info
+FROM c20441826_phaseii_dw.fact_pricing;
+
+-- Confirm Creation of HASH Partitions
+SELECT * FROM pg_partition_tree('c20441826_phaseii_dw.fact_pricing_hash'::regclass);
+
+-- ---------------------------------------------------------------------
+-- PARTITIONING TESTS - USING EXPLAIN, ANALYZE, BUFFERS
+-- ---------------------------------------------------------------------
+
+-- RANGE TESTING
+-- 1: Pre-Partition Test
+-- 2: Post-Partition Test
+-- ----------------------
+
+-- Part 1
+EXPLAIN (ANALYZE, BUFFERS)
+WITH bounds AS (
+  SELECT
+    to_char(date_trunc('week', MIN(date_actual)),'YYYYMMDD')::int AS k_from,
+    to_char(date_trunc('week', MIN(date_actual)) + interval '7 days','YYYYMMDD')::int AS k_to
+  FROM c20441826_phaseii_dw.dim_date
+)
+SELECT COALESCE(SUM(fp.line_revenue),0) AS total_first_week
+FROM c20441826_phaseii_dw.fact_pricing fp
+CROSS JOIN bounds b
+WHERE fp.date_key >= b.k_from AND fp.date_key < b.k_to;
+
+-- Part 2
+EXPLAIN (ANALYZE, BUFFERS)
+WITH bounds AS (
+  SELECT
+    to_char(date_trunc('week', MIN(date_actual)),'YYYYMMDD')::int AS k_from,
+    to_char(date_trunc('week', MIN(date_actual)) + interval '7 days','YYYYMMDD')::int AS k_to
+  FROM c20441826_phaseii_dw.dim_date
+)
+SELECT COALESCE(SUM(fp.line_revenue),0) AS total_first_week
+FROM c20441826_phaseii_dw.fact_pricing_range fp
+CROSS JOIN bounds b
+WHERE fp.date_key >= b.k_from AND fp.date_key < b.k_to;
+
+-- LIST TESTING
+-- 1: Pre-Partition Test
+-- 2: Post-Partition Test
+-- ----------------------
+
+-- Part 1
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COALESCE(SUM(line_revenue),0) AS revenue_discount_coupons
+FROM c20441826_phaseii_dw.fact_pricing
+WHERE (extra_info->>'coupon') IN ('SAVE10','WELCOME');
+
+-- Part 2
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COALESCE(SUM(line_revenue),0) AS revenue_discount_coupons
+FROM c20441826_phaseii_dw.fact_pricing_list
+WHERE coupon IN ('SAVE10','WELCOME');
+
+-- HASH TESTING
+-- 1: Pre-Partition Test
+-- 2: Post-Partition Test
+-- ----------------------
+
+-- Part 1
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COALESCE(SUM(line_revenue),0) AS revenue_for_one_product
+FROM c20441826_phaseii_dw.fact_pricing
+WHERE product_key = (SELECT MIN(product_key) FROM c20441826_phaseii_dw.dim_product);
+
+-- Part 2
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COALESCE(SUM(line_revenue),0) AS revenue_for_one_product
+FROM c20441826_phaseii_dw.fact_pricing_hash
+WHERE product_key = (SELECT MIN(product_key) FROM c20441826_phaseii_dw.dim_product);

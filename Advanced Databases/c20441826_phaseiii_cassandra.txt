@@ -1,0 +1,247 @@
+-- ====================================
+-- ADVANCED DATABASES - PHASE 3
+-- CONOR DAVIS - C20441826
+-- CASSANDRA PARTITIONING & REPLICATION
+-- ====================================
+
+-- -------------------------------
+-- PARTITIONING & CLUSTERING SETUP
+-- -------------------------------
+
+-- VERIFICATION
+-- ------------
+SELECT release_version FROM system.local
+
+-- KEYSPACE
+-- --------
+
+CREATE KEYSPACE IF NOT EXISTS c20441826_phaseiii_ks
+WITH replication = {'class':'SimpleStrategy','replication_factor':1};
+USE c20441826_phaseiii_ks;
+
+-- CREATE TABLES
+-- -------------
+
+-- Part 1
+-- c20441826_pricing_by_week 
+-- Partitioning by merchant & Clustering by week_start
+-- ---------------------------------------------------
+DROP TABLE IF EXISTS c20441826_pricing_by_week;
+CREATE TABLE IF NOT EXISTS c20441826_pricing_by_week (
+	merchant         text,
+	week_start       date,
+	revenue_gained   double,
+	revenue_lost     double,
+	coupons_used     set<text>,
+PRIMARY KEY ((merchant), week_start)) WITH CLUSTERING ORDER BY (week_start DESC);
+
+-- Part 2
+-- c20441826_category_price_by_day 
+-- Partitioning by category & Clustering by date_actual & merchant
+-- ---------------------------------------------------------------
+DROP TABLE IF EXISTS c20441826_category_price_by_day;
+CREATE TABLE IF NOT EXISTS c20441826_category_price_by_day (
+	category         text,
+	date_actual      date,
+	merchant         text,
+	avg_unit_price   double,
+	avg_discount     double,
+	avg_price_delta  double,
+	coupons_used     set<text>,
+PRIMARY KEY ((category), date_actual, merchant)) WITH CLUSTERING ORDER BY (date_actual DESC, merchant ASC);
+
+-- Part 3
+-- c20441826_category_sales_by_week 
+-- Partitioning by week_start & Clustering by category & merchant
+-- --------------------------------------------------------------
+DROP TABLE IF EXISTS c20441826_category_sales_by_week;
+CREATE TABLE IF NOT EXISTS c20441826_category_sales_by_week (
+	week_start       date,
+	category         text,
+	merchant         text,
+	revenue_gained   double,
+	revenue_lost     double,
+PRIMARY KEY ((week_start), category, merchant)) WITH CLUSTERING ORDER BY (category ASC, merchant ASC);
+
+-- ---------------
+-- DATA POPULATION
+-- ---------------
+
+-- ETL Processing
+
+-- 1: Pricing By Week 
+-- Partitioning by merchant & Clustering by week_start
+-- ---------------------------------------------------
+COPY (
+	SELECT  dp.merchant, -- Merchant Partitioning
+			date_trunc('week', d.date_actual)::date AS week_start, -- Week Time Grain
+			SUM(fp.line_revenue)::float8 AS revenue_gained, -- Total Revenue By Line
+			SUM(fp.quantity * fp.discount)::float8 AS revenue_lost, -- Total Revenue Lost By Discount
+			COALESCE('{' || string_agg(DISTINCT quote_literal(fp.extra_info->>'coupon'), ',') FILTER (WHERE (fp.extra_info->>'coupon') IS NOT NULL AND (fp.extra_info->>'coupon') <> '') || '}', '{}') AS coupons_used  --Coupons Used
+	FROM c20441826_phaseii_dw.fact_pricing fp -- Source Table
+	JOIN c20441826_phaseii_dw.dim_date d USING(date_key) -- Join Date Dimensional Table
+	JOIN c20441826_phaseii_dw.dim_product dp USING(product_key) -- Join Product Dimensional Table
+	GROUP BY 1,2 -- Aggregate by merchant and week_start
+) TO '/etl/c20441826_pricing_by_week.csv' WITH CSV HEADER;
+
+-- 2: Category Price By Day
+-- Partitioning by category & Clustering by date_actual & merchant
+-- ---------------------------------------------------------------
+COPY (
+	SELECT  dp.category, -- Category Partitioning
+			d.date_actual AS date_actual, -- Day Time Grain
+			dp.merchant, -- For Merchant Comparisons
+			AVG(fp.unit_price)::float8 AS avg_unit_price, -- Average Unit Price
+			AVG(fp.discount)::float8 AS avg_discount, -- Average Discount
+			AVG(fp.price_delta)::float8 AS avg_price_delta, -- Average Price Delta
+			COALESCE('{' || string_agg(DISTINCT quote_literal(fp.extra_info->>'coupon'), ',') FILTER (WHERE (fp.extra_info->>'coupon') IS NOT NULL AND (fp.extra_info->>'coupon') <> '') || '}', '{}') AS coupons_used  --Coupons Used
+	FROM c20441826_phaseii_dw.fact_pricing fp -- Source Table
+	JOIN c20441826_phaseii_dw.dim_date d USING(date_key) -- Join Date Dimensional Table
+	JOIN c20441826_phaseii_dw.dim_product dp USING(product_key) -- Join Product Dimensional Table
+	GROUP BY 1,2,3 -- Aggregate by category, date_actual, and merchant
+) TO '/etl/c20441826_category_price_by_day.csv' WITH CSV HEADER;
+
+-- 3: Category Sales By Week
+-- Partitioning by week_start & Clustering by category & merchant
+-- --------------------------------------------------------------
+COPY (
+	SELECT  date_trunc('week', d.date_actual)::date AS week_start, -- Weekly Partitioning
+			dp.category, -- Clustering By Category
+			dp.merchant, -- Clustering By Merchant
+			SUM(fp.line_revenue)::float8 AS revenue_gained, -- Total Revenue By Line
+			SUM(fp.quantity * fp.discount)::float8 AS revenue_lost -- Total Revenue Lost By Discount
+	FROM c20441826_phaseii_dw.fact_pricing fp -- Source Table
+	JOIN c20441826_phaseii_dw.dim_date d USING(date_key) -- Join Date Dimensional Table
+	JOIN c20441826_phaseii_dw.dim_product dp USING(product_key) -- Join Product Dimensional Table
+	GROUP BY 1,2,3 -- Aggregate by week_start, category, and merchant
+) TO '/etl/c20441826_category_sales_by_week.csv' WITH CSV HEADER;
+
+-- Docker Command
+docker exec -it dev-postgres-cdavis psql -U devuser -d postgres -v ON_ERROR_STOP=1 -f /etl/etl_cassandra.sql
+
+-- POPULATE
+-- --------
+
+COPY c20441826_phaseiii_ks.c20441826_pricing_by_week (merchant, week_start, revenue_gained, revenue_lost, coupons_used) FROM '/etl/c20441826_pricing_by_week.csv' WITH HEADER = TRUE;
+COPY c20441826_phaseiii_ks.c20441826_category_price_by_day (category, date_actual, merchant, avg_unit_price, avg_discount, avg_price_delta, coupons_used) FROM '/etl/c20441826_category_price_by_day.csv' WITH HEADER = TRUE;
+COPY c20441826_phaseiii_ks.c20441826_category_sales_by_week (week_start, category, merchant, revenue_gained, revenue_lost) FROM '/etl/c20441826_category_sales_by_week.csv' WITH HEADER = TRUE;
+
+-- -------------------------------
+-- PARTITIONING & CLUSTERING TESTS
+-- -------------------------------
+
+-- INITIALIZATION
+-- --------------
+USE c20441826_phaseiii_ks;
+CONSISTENCY ONE;
+TRACING ON;
+PAGING OFF;
+
+-- QUERY SET ONE 
+-- -------------
+
+-- 1A - PARTITION KEY TEST
+-- Efficient Access With Partition Key --> Merchant Hashed & Clustering Order for Limit
+SELECT week_start, revenue_gained, revenue_lost
+FROM c20441826_pricing_by_week
+WHERE merchant = 'Merchant 7'
+LIMIT 8;
+
+-- 1B - MISSING PARTITION KEY TEST
+-- Inefficient Access Without Partition Key --> Must Scan Numerous Merchants To Find Matching Date
+SELECT week_start, revenue_gained, revenue_lost
+FROM c20441826_pricing_by_week
+WHERE week_start >= '2025-09-08'
+LIMIT 8
+ALLOW FILTERING;
+
+-- QUERY SET TWO
+-- -------------
+
+-- 2A - LEADING CLUSTER KEY TEST
+-- Efficient Access - Range Slice
+SELECT category, date_actual, merchant, avg_unit_price, avg_discount
+FROM c20441826_category_price_by_day
+WHERE category = 'Category 10' AND date_actual >= '2025-09-01' AND date_actual <= '2025-09-30'
+LIMIT 8;
+
+-- 2B - MISSING LEADING CLUSTER KEY TEST
+-- Missing Leading Cluster Key (date_actual) --> Results in Inefficient Search
+SELECT category, date_actual, merchant, avg_discount
+FROM c20441826_category_price_by_day
+WHERE category = 'Category 10' AND merchant = 'Merchant 5'
+LIMIT 8
+ALLOW FILTERING;
+
+-- QUERY SET THREE
+-- ---------------
+
+-- 3 - COLLECTION DATATYPE TEST
+CREATE INDEX IF NOT EXISTS c20441826_idx_delta_coupons
+ON c20441826_category_price_by_day (VALUES(coupons_used));
+
+SELECT avg_price_delta, coupons_used
+FROM c20441826_category_price_by_day
+WHERE coupons_used CONTAINS 'SAVE10';
+
+TRACING OFF;
+
+-- -----------------------------------------------
+-- REPLICATION TESTING & CONSISTENCY LEVEL TESTING
+-- -----------------------------------------------
+
+-- TURN ON TRACING AGAIN
+TRACING ON;
+
+-- RF = 1
+-- ------
+
+-- Set Replication Factor
+ALTER KEYSPACE c20441826_phaseiii_ks
+WITH replication = {'class':'SimpleStrategy','replication_factor':1};
+
+-- Evidence
+DESCRIBE KEYSPACE c20441826_phaseiii_ks;
+
+-- Testing
+CONSISTENCY ONE;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';
+CONSISTENCY QUORUM;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';
+CONSISTENCY ALL;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';
+
+-- RF = 2
+-- ------
+
+-- Set Replication Factor
+ALTER KEYSPACE c20441826_phaseiii_ks
+WITH replication = {'class':'SimpleStrategy','replication_factor':2};
+
+-- Node Tool Repair
+docker exec -it cassandra1 nodetool repair -full c20441826_phaseiii_ks
+
+-- Evidence
+DESCRIBE KEYSPACE c20441826_phaseiii_ks;
+
+-- Testing
+CONSISTENCY ONE;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';
+CONSISTENCY QUORUM;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';
+CONSISTENCY ALL;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';
+
+-- RF = 2 - Missing Node Test
+-- --------------------------
+
+-- Outside cqlsh --> Stop Cassandra3
+docker stop cassandra3
+
+-- Testing
+CONSISTENCY ONE;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';
+CONSISTENCY QUORUM;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';
+CONSISTENCY ALL;
+SELECT count(*) FROM c20441826_category_sales_by_week WHERE week_start = '2025-09-08';

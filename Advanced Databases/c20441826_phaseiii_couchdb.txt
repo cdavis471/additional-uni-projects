@@ -1,0 +1,301 @@
+# ==================================
+# ADVANCED DATABASES - PHASE 3
+# CONOR DAVIS - C20441826
+# COUCHDB PARTITIONING & REPLICATION
+# ==================================
+
+# ------------
+# NEW YML FILE
+# ------------
+
+services:
+
+  couchdb:
+    image: couchdb:latest
+    container_name: couchdb
+    restart: unless-stopped
+    ports:
+      - "5984:5984"
+    environment:
+      COUCHDB_USER: devuser
+      COUCHDB_PASSWORD: devpass
+      COUCHDB_ERLANG_COOKIE: c20441826_cookie
+      COUCHDB_SECRET: c20441826_secret
+      NODENAME: couchdb@couchdb.local
+    networks:
+      couchnet:
+        aliases:
+          - couchdb.local
+    volumes:
+      - ./couchdb_data:/opt/couchdb/data
+      - "C:/College/Final Year/Advanced Databases/Practical/Assignment - Phase 3/shared_volume:/etl"
+      
+  couchdbtwo:
+    image: couchdb:latest
+    container_name: couchdbtwo
+    restart: unless-stopped
+    ports:
+      - "5985:5984"
+    environment:
+      COUCHDB_USER: devuser
+      COUCHDB_PASSWORD: devpass
+      COUCHDB_ERLANG_COOKIE: c20441826_cookie
+      COUCHDB_SECRET: c20441826_secret
+      NODENAME: couchdb@couchdbtwo.local
+    networks:
+      couchnet:
+        aliases:
+          - couchdbtwo.local
+    volumes:
+      - ./couchdb_data_two:/opt/couchdb/data
+      - "C:/College/Final Year/Advanced Databases/Practical/Assignment - Phase 3/shared_volume:/etl"
+
+networks:
+  couchnet:
+    driver: bridge
+
+volumes:
+  couchdb_data:
+  couchdb_data_two:
+
+# --------------
+# INITIALIZATION
+# --------------
+
+# ADD NODE TO CLUSTER
+# -------------------
+
+curl -u devuser:devpass -H "Content-Type: application/json" -X POST http://localhost:5984/_cluster_setup -d "{\"action\":\"add_node\",\"host\":\"couchdbtwo.local\",\"port\":5984,\"username\":\"devuser\",\"password\":\"devpass\"}"
+curl -u devuser:devpass -H "Content-Type: application/json" -X POST http://localhost:5984/_cluster_setup -d "{\"action\":\"finish_cluster\"}"
+
+# VERIFY MEMBERSHIP
+# -----------------
+curl -u devuser:devpass http://localhost:5984/_membership
+curl -u devuser:devpass http://localhost:5985/_membership
+
+# ERROR FIXING 
+# ({"error":"internal_server_error","reason":"No DB shards could be opened.","ref":3318763005})
+# ---------------------------------------------------------------------------------------------
+
+# Bring CouchDB Down
+docker compose -f docker-compose-couchdb.yml down
+
+# Backup CouchDB
+xcopy /E /I /H /Y couchdb_data couchdb_data_backup
+xcopy /E /I /H /Y couchdb_data_two couchdb_data_two_backup
+
+# Reset CouchDB
+rmdir /S /Q couchdb_data
+rmdir /S /Q couchdb_data_two
+mkdir couchdb_data
+mkdir couchdb_data_two
+
+# Re-create Cluster
+curl -u devuser:devpass -H "Content-Type: application/json" -X POST http://localhost:5984/_cluster_setup -d "{\"action\":\"add_node\",\"host\":\"couchdbtwo.local\",\"port\":5984,\"username\":\"devuser\",\"password\":\"devpass\"}"
+curl -u devuser:devpass -H "Content-Type: application/json" -X POST http://localhost:5984/_cluster_setup -d "{\"action\":\"finish_cluster\"}"
+
+# Verify Cluster
+curl -u devuser:devpass http://localhost:5984/_membership
+curl -u devuser:devpass http://localhost:5985/_membership
+
+# --------------------------
+# INITIALIZATION - CONTINUED
+# --------------------------
+
+# New Bulk Import (Using Phase II Data)
+# -------------------------------------
+docker exec -i couchdb sh -c "curl -u devuser:devpass -H 'Content-Type: application/json' -X POST http://localhost:5984/c20441826_phaseiii_couchdb/_bulk_docs --data-binary @/etl/c20441826_phaseii_bulk.json"
+
+# Verify Bulk Import
+# ------------------
+curl -u devuser:devpass http://localhost:5984/c20441826_phaseiii_couchdb
+curl -u devuser:devpass http://localhost:5985/c20441826_phaseiii_couchdb
+
+# --------------------
+# VIEW RE-CREATION
+# --------------------
+
+# Design Document - Two Views
+# Engagement Analytical Views
+# 1: List of Events (By Customer) (Add To Cart etc.)
+# 2: List of Events (By Device) 
+# Note: Added "options" line for non-partitioned view
+# --------------------------------------------------
+
+{
+	"_id": "_design/engagementviews",
+	"options": { "partitioned": false },
+	"views": 
+	{
+		"event_type_counts": 
+		{
+			"map": "function(doc){if(doc._id && doc._id.indexOf('customer:')===0 && doc.events){doc.events.forEach(function(e){emit(e.type,1);});}}",
+			"reduce": "_sum"
+		},
+		"events_by_device": 
+		{
+			"map": "function(doc){if(doc._id && doc._id.indexOf('customer:')===0 && doc.events){doc.events.forEach(function(e){if(e.device){emit(e.device,1);}});}}",
+			"reduce": "_sum"
+		}
+	}
+}
+
+# ----------------------------
+# Partition & Clustering Setup
+# ----------------------------
+
+# Verify Consistent Nodes In Cluster
+curl -u devuser:devpass http://localhost:5984/_membership
+curl -u devuser:devpass http://localhost:5985/_membership
+
+# -------------------
+# Replication Testing
+# -------------------
+
+# Replication Scenario
+# --------------------
+
+curl -u devuser:devpass -X PUT http://localhost:5984/c20441826_phaseiii_couchdb_replication
+
+# Scenario One - One-Time --> Uni-Directional
+# -------------------------------------------
+
+# Creation
+curl -u devuser:devpass -H "Content-Type: application/json" -X PUT http://localhost:5984/_replicator/c20441826_onetime_uni -d "{\"source\":\"http://devuser:devpass@couchdb.local:5984/c20441826_phaseiii_couchdb\",\"target\":\"http://devuser:devpass@couchdbtwo.local:5984/c20441826_phaseiii_couchdb_replication\",\"create_target\":true,\"continuous\":false}"
+# Verification
+curl -u devuser:devpass http://localhost:5984/_scheduler/docs/_replicator/c20441826_onetime_uni
+curl -u devuser:devpass http://localhost:5984/_scheduler/jobs
+
+# Scenario Two - Continuous --> Uni-Directional
+# ---------------------------------------------
+
+# Creation
+curl -u devuser:devpass -H "Content-Type: application/json" -X PUT http://localhost:5984/_replicator/c20441826_cont_uni -d "{\"source\":\"http://devuser:devpass@couchdb.local:5984/c20441826_phaseiii_couchdb\",\"target\":\"http://devuser:devpass@couchdbtwo.local:5984/c20441826_phaseiii_couchdb_replication\",\"continuous\":true}"
+# Verification
+curl -u devuser:devpass http://localhost:5984/_scheduler/docs/_replicator/c20441826_cont_uni
+curl -u devuser:devpass http://localhost:5984/_scheduler/jobs
+
+# Scenario Three - One-Time --> Bi-Directional
+# --------------------------------------------
+
+# Creation
+curl -u devuser:devpass -H "Content-Type: application/json" -X PUT http://localhost:5984/_replicator/c20441826_onetime_reverse -d "{\"source\":\"http://devuser:devpass@couchdbtwo.local:5984/c20441826_phaseiii_couchdb_replication\",\"target\":\"http://devuser:devpass@couchdb.local:5984/c20441826_phaseiii_couchdb\",\"continuous\":false}"
+# Verification
+curl -u devuser:devpass http://localhost:5984/_scheduler/docs/_replicator/c20441826_onetime_reverse
+curl -u devuser:devpass http://localhost:5984/_scheduler/jobs
+
+# Scenario Four - Continuous --> Bi-Directional
+# ---------------------------------------------
+
+# Creation
+curl -u devuser:devpass -H "Content-Type: application/json" -X PUT http://localhost:5984/_replicator/c20441826_cont_reverse -d "{\"source\":\"http://devuser:devpass@couchdbtwo.local:5984/c20441826_phaseiii_couchdb_replication\",\"target\":\"http://devuser:devpass@couchdb.local:5984/c20441826_phaseiii_couchdb\",\"continuous\":true}"
+# Verification
+curl -u devuser:devpass http://localhost:5984/_scheduler/docs/_replicator/c20441826_cont_reverse
+curl -u devuser:devpass http://localhost:5984/_scheduler/jobs
+
+# Check Creation
+# --------------
+
+# Check Created Databases
+curl -u devuser:devpass http://localhost:5984/_all_dbs
+curl -u devuser:devpass http://localhost:5985/_all_dbs
+# Check Documents in Replication
+curl -u devuser:devpass "http://localhost:5984/_replicator/_all_docs?include_docs=true"
+curl -u devuser:devpass "http://localhost:5985/_replicator/_all_docs?include_docs=true"
+
+# -----------------
+# Partition Testing
+# -----------------
+
+# Non-Partitioned & Partitioned Databases
+# ---------------------------------------
+
+curl -u devuser:devpass -X PUT "http://localhost:5984/c20441826_phaseiii_pt_one?n=2&q=4"
+curl -u devuser:devpass -X PUT "http://localhost:5984/c20441826_phaseiii_pt_two?partitioned=true&n=2&q=4"
+
+# Verification
+curl -u devuser:devpass http://localhost:5984/c20441826_phaseiii_pt_one
+curl -u devuser:devpass http://localhost:5984/c20441826_phaseiii_pt_two
+
+# Bulk Load
+docker exec -i couchdb sh -c "curl -u devuser:devpass -H 'Content-Type: application/json' -X POST http://localhost:5984/c20441826_phaseiii_pt_one/_bulk_docs --data-binary @/etl/c20441826_phaseii_bulk.json"
+docker exec -i couchdb sh -c "curl -u devuser:devpass -H 'Content-Type: application/json' -X POST http://localhost:5984/c20441826_phaseiii_pt_two/_bulk_docs --data-binary @/etl/c20441826_phaseii_bulk.json"
+
+# Different Test Views
+# --------------------
+
+# Non-Partitioned View - Global Scope
+{
+  "_id": "_design/engagementviews_np_default",
+  "views": {
+    "event_type_counts": {
+      "map": "function(doc){if(doc._id && doc._id.indexOf('customer:')===0 && doc.events){doc.events.forEach(function(e){emit(e.type,1);});}}",
+      "reduce": "_sum"
+    },
+    "events_by_device": {
+      "map": "function(doc){if(doc._id && doc._id.indexOf('customer:')===0 && doc.events){doc.events.forEach(function(e){if(e.device){emit(e.device,1);}});}}",
+      "reduce": "_sum"
+    }
+  }
+}
+
+# Partitioned View - Global Scope
+{
+  "_id": "_design/engagementviews_p_global",
+  "options": { "partitioned": false },
+  "views": {
+    "event_type_counts": {
+      "map": "function(doc){if(doc._id && doc._id.indexOf('customer:')===0 && doc.events){doc.events.forEach(function(e){emit(e.type,1);});}}",
+      "reduce": "_sum"
+    },
+    "events_by_device": {
+      "map": "function(doc){if(doc._id && doc._id.indexOf('customer:')===0 && doc.events){doc.events.forEach(function(e){if(e.device){emit(e.device,1);}});}}",
+      "reduce": "_sum"
+    }
+  }
+}
+
+# Partitioned View - Partition Scope
+{
+  "_id": "_design/engagementviews_p_part",
+  "views": {
+    "event_type_counts": {
+      "map": "function(doc){if(doc._id && doc._id.indexOf('customer:')===0 && doc.events){doc.events.forEach(function(e){emit(e.type,1);});}}",
+      "reduce": "_sum"
+    },
+    "events_by_device": {
+      "map": "function(doc){if(doc._id && doc._id.indexOf('customer:')===0 && doc.events){doc.events.forEach(function(e){if(e.device){emit(e.device,1);}});}}",
+      "reduce": "_sum"
+    }
+  }
+}
+
+# Partition Queries
+# -----------------
+
+# Verification
+curl -u devuser:devpass http://localhost:5984/c20441826_phaseiii_pt_two/_partition/customer
+
+# Pre-Warm
+curl -u devuser:devpass -s -o NUL "http://localhost:5984/c20441826_phaseiii_pt_one/_design/engagementviews_np_default/_view/events_by_device?group=true"
+curl -u devuser:devpass -s -o NUL "http://localhost:5984/c20441826_phaseiii_pt_two/_design/engagementviews_p_global/_view/events_by_device?group=true"
+curl -u devuser:devpass -s -o NUL "http://localhost:5984/c20441826_phaseiii_pt_two/_partition/customer/_design/engagementviews_p_part/_view/events_by_device?group=true"
+
+# Test Case One
+# Non-Partitioned - Global View
+curl -u devuser:devpass -s -o NUL -w "T1 NP Global View time_total=%{time_total}s" "http://localhost:5984/c20441826_phaseiii_pt_one/_design/engagementviews_np_default/_view/events_by_device?group=true"
+# Partitioned - Global View
+curl -u devuser:devpass -s -o NUL -w "T1 P Global View time_total=%{time_total}s" "http://localhost:5984/c20441826_phaseiii_pt_two/_design/engagementviews_p_global/_view/events_by_device?group=true"
+
+# Test Case Two
+# Partition Key Failure
+curl -u devuser:devpass "http://localhost:5984/c20441826_phaseiii_pt_two/_design/engagementviews_p_part/_view/events_by_device?group=true"
+# Partitioned vs Non-Partitioned Scope Performance
+curl -u devuser:devpass -s -o NUL -w "T2 P Partition Scoped View time_total=%{time_total}s" http://localhost:5984/c20441826_phaseiii_pt_two/_partition/customer/_design/engagementviews_p_part/_view/events_by_device?group=true"
+curl -u devuser:devpass -s -o NUL -w "T2 P Global Scoped View time_total=%{time_total}s" http://localhost:5984/c20441826_phaseiii_pt_two/_design/engagementviews_p_global/_view/events_by_device?group=true"
+
+# Test Case Three
+# Timed Partition List
+curl -u devuser:devpass -s -o NUL -w "T3 P _partition/customer/_all_docs time_total=%{time_total}s" "http://localhost:5984/c20441826_phaseiii_pt_two/_partition/customer/_all_docs?limit=500"
+# Timed Non-Partition List - Using Key Collation Ordering (Correct Encoding)
+curl -u devuser:devpass -s -o NUL -w "T3 NP prefix _all_docs time_total=%{time_total}s\n" -G "http://localhost:5984/c20441826_phaseiii_pt_one/_all_docs" --data-urlencode "startkey=\"customer:\"" --data-urlencode "endkey=\"customer:\ufff0\"" --data-urlencode "limit=500"
